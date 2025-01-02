@@ -12,6 +12,7 @@ class Config:
     SECRET_KEY: str = config("SECRET_KEY")
     ALGORITHM: str = config("ALGORITHM")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(config("ACCESS_TOKEN_EXPIRE_MINUTES"))
+    APP_LOG_FILEPATH: str = config("APP_LOG_FILEPATH")
     
     # Email configuration
     EMAIL_HOST: str = config("EMAIL_HOST")

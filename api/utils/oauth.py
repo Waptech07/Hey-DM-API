@@ -45,7 +45,7 @@ async def get_google_user_info(request: Request):
         token = await oauth.google.authorize_access_token(request)
         # User info is included in the token response
         user_info = token.get("userinfo", {})
-        logging.info(f"User Info Retrieved: {user_info}\nToken-:{token}")
+        # logging.info(f"User Info Retrieved: {user_info}\nToken-:{token}")
         return user_info
     
 
@@ -57,10 +57,10 @@ async def get_github_authorization_url(request: Request) -> str:
 
 async def get_github_user_info(request: Request):
     token = await oauth.github.authorize_access_token(request)
-    logging.info(f"Token: {token}")
+    # logging.info(f"Token: {token}")
     user_resp = await oauth.github.get('user', token=token)
     user_info = user_resp.json()
-    logging.info(f"User info: {user_info}")
+    # logging.info(f"User info: {user_info}")
     
     # Fetch primary email
     email_resp = await oauth.github.get('user/emails', token=token)
