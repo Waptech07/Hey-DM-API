@@ -3,9 +3,9 @@ import logging
 from api.utils.settings import APP_LOG_FILEPATH
 
 # Setup logging
-# log_dir = os.path.dirname(__file__)  # Get the current directory
-# log_file = os.path.join(log_dir, "app.log")
-log_file = APP_LOG_FILEPATH
+log_dir = os.path.dirname(__file__)  # Get the current directory
+log_file = os.path.join(log_dir, "app.log")
+# log_file = APP_LOG_FILEPATH
 
 
 if not os.path.exists(log_file):

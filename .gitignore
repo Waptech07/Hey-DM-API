@@ -1,5 +1,4 @@
 .env
-*.log
 alembic.ini
 *__/
 .vscode

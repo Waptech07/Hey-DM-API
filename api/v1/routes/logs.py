@@ -4,8 +4,8 @@ from api.utils.settings import APP_LOG_FILEPATH
 
 log_router = APIRouter()
 
-# LOG_FILE_PATH = 'app.log'
-LOG_FILE_PATH = APP_LOG_FILEPATH
+LOG_FILE_PATH = 'app.log'
+# LOG_FILE_PATH = APP_LOG_FILEPATH
 
 # Debugging: Log the log file path
 # print(f"Log file path (logs.py): {LOG_FILE_PATH}")
