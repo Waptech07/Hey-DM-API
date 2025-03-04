@@ -10,6 +10,8 @@ class Chat(Base):
     id = Column(String, primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    is_pinned = Column(Boolean, default=False)
+    last_read = Column(DateTime, default=datetime.utcnow)
 
     # One-to-Many relationship with messages
     messages = relationship("Message", back_populates="chat")

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, String, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from api.db.session import Base
@@ -12,6 +12,8 @@ class Message(Base):
     timestamp = Column(DateTime, default=datetime.now)
     status = Column(String, default="sent")  # could be 'sent', 'delivered', 'read'
     pinned = Column(Boolean, default=False)
+    translation = Column(Text, nullable=True)
+    detected_language = Column(String, nullable=True)
 
     # Foreign key to the chat
     chat_id = Column(String, ForeignKey("chats.id"))
