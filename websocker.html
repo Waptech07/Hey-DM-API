@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat WebSocket Test</title>
+</head>
+<body>
+    <div>
+        <input type="text" id="chatId" placeholder="Chat ID">
+        <input type="text" id="token" placeholder="JWT Token" style="width: 300px;">
+        <button onclick="connect()">Connect</button>
+    </div>
+    <div id="messages"></div>
+
+    <script>
+        let ws = null;
+        
+        function connect() {
+            const chatId = document.getElementById('chatId').value;
+            const token = document.getElementById('token').value;
+            
+            if (!chatId || !token) {
+                alert('Please fill in both fields');
+                return;
+            }
+
+            const ws = new WebSocket(`ws://localhost:8000/api/v1/chat/${chatId}/ws?token=${token}`);
+            
+            ws.onopen = () => {
+                log('Connected to chat!');
+                
+            };
+            
+            ws.onmessage = (event) => {
+                log(`Received: ${event.data}`);
+            };
+            
+            ws.onerror = (error) => {
+                log(`Error: ${error}`);
+            };
+            
+            ws.onclose = () => {
+                log('Disconnected');
+            };
+        }
+
+        function log(message) {
+            const div = document.createElement('div');
+            div.textContent = message;
+            document.getElementById('messages').appendChild(div);
+        }
+    </script>
+</body>
+</html>
