@@ -35,6 +35,14 @@ def create_refresh_token(user_id: str) -> str:
     return encoded_jwt
 
 
+def decode_access_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except JWTError:
+        return None
+
+
 def verify_access_token(token: str, credentials_exception) -> str:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
