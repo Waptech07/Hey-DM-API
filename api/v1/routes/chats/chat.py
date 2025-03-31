@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from typing import List
+import json
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, Cookie, status
 from sqlalchemy.orm import Session
 from api.db.session import get_db
 from api.v1.models.chat import Chat
@@ -6,9 +8,9 @@ from api.v1.models.contact import Contact
 from api.v1.models.message import Message
 from api.v1.models.reaction import Reaction
 from api.v1.models.user import User
-from api.v1.schemas.chat import ChatCreate, ChatResponse
-from api.v1.schemas.message import MessageCreate
-from api.utils.user import get_current_user
+from api.v1.schemas.chat import ChatResponse
+from api.v1.schemas.message import MessageCreate, MessageResponse
+from api.utils.user import get_current_user, decode_access_token
 from api.utils.websocket import manager
 from api.v1.services.user import UserService
 from langdetect import detect
@@ -38,17 +40,41 @@ async def create_chat(
         raise HTTPException(
             status_code=403, detail="Recipient is not in your contact list"
         )
-
+    
+    # if chat exists
+    chat_exists = db.query(Chat).filter(Chat.user1_id == current_user.id, Chat.user2_id == recipient_id)
+    if chat_exists.first():
+        raise HTTPException(status_code=400, detail="Chat already exists")
+    
     # Create a new chat
     chat = Chat(user1_id=current_user.id, user2_id=recipient_id)
     db.add(chat)
     db.commit()
     db.refresh(chat)
 
-    return {"chat_id": chat.id, "message": "Chat created successfully"}
+    return {
+        "id": chat.id,
+        "created_at": chat.created_at,
+        "updated_at": chat.updated_at,
+        "user1": {
+            "id": current_user.id,
+            "username": current_user.username,
+            "email": current_user.email,
+            "is_online": current_user.is_online,
+        },
+        "user2": {
+            "id": recipient.id,
+            "username": recipient.username,
+            "email": recipient.email,
+            "is_online": recipient.is_online,
+        },
+        "last_message": None,
+        "unread_count": 0,
+        "is_pinned": False,
+    }
 
 
-@chat_router.get("/chats")
+@chat_router.get("/chats", response_model=List[ChatResponse])
 async def get_all_chats(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
@@ -57,37 +83,120 @@ async def get_all_chats(
         .filter((Chat.user1_id == current_user.id) | (Chat.user2_id == current_user.id))
         .all()
     )
-    return {
-        "chats": [
-            {"chat_id": chat.id, "participants": [chat.user1_id, chat.user2_id]}
-            for chat in chats
-        ]
-    }
+
+    chat_responses = []
+    for chat in chats:
+        last_message = (
+            db.query(Message)
+            .filter(Message.chat_id == chat.id)
+            .order_by(Message.timestamp.desc())
+            .first()
+        )
+        unread_count = (
+            db.query(Message)
+            .filter(
+                Message.chat_id == chat.id,
+                Message.sender_id != current_user.id,
+                Message.status != "read",
+            )
+            .count()
+        )
+
+        # Convert to ChatResponse instance
+        chat_responses.append(
+            {
+                "id": chat.id,
+                "created_at": chat.created_at,
+                "updated_at": chat.updated_at,
+                "user1": {
+                    "id": chat.user1.id,
+                    "username": chat.user1.username,
+                    "email": chat.user1.email,
+                    "is_online": chat.user1.is_online,
+                },
+                "user2": {
+                    "id": chat.user2.id,
+                    "username": chat.user2.username,
+                    "email": chat.user2.email,
+                    "is_online": chat.user2.is_online,
+                },
+                "last_message": (
+                    {
+                        "id": last_message.id,
+                        "content": last_message.content,
+                        "sender_id": last_message.sender_id,
+                        "timestamp": last_message.timestamp,
+                        "status": last_message.status,
+                        "pinned": last_message.pinned,
+                    }
+                    if last_message
+                    else None
+                ),
+                "unread_count": unread_count,
+                "is_pinned": chat.is_pinned,
+            }
+        )
+
+    return chat_responses
 
 
-@chat_router.get("/{chat_id}")
+@chat_router.get("/{chat_id}", response_model=ChatResponse)
 async def get_chat(
     chat_id: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    chat = db.query(Chat).filter(Chat.id == chat_id ).first()
+    chat = db.query(Chat).filter(Chat.id == chat_id).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
+    other_user = chat.user1 if chat.user2_id == current_user.id else chat.user2
+    last_message = (
+        db.query(Message)
+        .filter(Message.chat_id == chat.id)
+        .order_by(Message.timestamp.desc())
+        .first()
+    )
+    unread_count = (
+        db.query(Message)
+        .filter(
+            Message.chat_id == chat.id,
+            Message.sender_id != current_user.id,
+            Message.status != "read",
+        )
+        .count()
+    )
+
     return {
-        "chat_id": chat.id,
-        "participants": [chat.user1_id, chat.user2_id],
+        "id": chat.id,
         "created_at": chat.created_at,
-        "messages": [
+        "updated_at": chat.updated_at,
+        "user1": {
+            "id": chat.user1.id,
+            "username": chat.user1.username,
+            "email": chat.user1.email,
+            "is_online": chat.user1.is_online,
+        },
+        "user2": {
+            "id": chat.user2.id,
+            "username": chat.user2.username,
+            "email": chat.user2.email,
+            "is_online": chat.user2.is_online,
+        },
+        "last_message": (
             {
-                "message_id": msg.id,
-                "content": msg.content,
-                "timestamp": msg.timestamp,
-                "status": msg.status,
+                "id": last_message.id,
+                "content": last_message.content,
+                "sender_id": last_message.sender_id,
+                "timestamp": last_message.timestamp,
+                "status": last_message.status,
+                "pinned": last_message.pinned,
             }
-            for msg in chat.messages
-        ],
+            if last_message
+            else None
+        ),
+        "unread_count": unread_count,
+        "is_pinned": chat.is_pinned,
     }
 
 
@@ -106,15 +215,148 @@ async def delete_chat(
     return {"message": "Chat deleted successfully"}
 
 
+# @chat_router.websocket("/{chat_id}/ws")
+# async def websocket_endpoint(
+#     websocket: WebSocket,
+#     chat_id: str,
+#     db: Session = Depends(get_db),
+# ):
+#     await websocket.accept()
+    
+#     # Extract token from headers
+#     headers = dict(websocket.headers)
+#     token = headers.get("authorization", "").replace("Bearer ", "")
+    
+#     # Validate token and user
+#     user = await get_current_user_websocket(token, db)
+#     if not user:
+#         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+#         return
+
 @chat_router.websocket("/{chat_id}/ws")
-async def websocket_endpoint(websocket: WebSocket, chat_id: str):
-    await manager.connect(websocket)
+async def websocket_endpoint(
+    websocket: WebSocket,
+    chat_id: str,
+    token: str = Query(...),  # Get token from query params
+    db: Session = Depends(get_db),
+):
+    # Authenticate user
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Could not validate credentials",
+    )
+    
+    try:
+        # Verify token
+        payload = decode_access_token(token)
+        if not payload:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+            
+        user_id = payload.get("user_id")
+        if not user_id:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+            
+        # Get user from database
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+            
+        # Verify chat access
+        chat = db.query(Chat).filter(
+            (Chat.id == chat_id) & 
+            ((Chat.user1_id == user_id) | (Chat.user2_id == user_id))
+        ).first()
+        if not chat:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+            
+    except Exception as e:
+        print(f"Authentication error: {str(e)}")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    # Connection successful
+    await manager.connect(chat_id, websocket)
     try:
         while True:
             data = await websocket.receive_text()
-            await manager.broadcast(f"Message from chat {chat_id}: {data}")
+            # Handle incoming messages if needed
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        manager.disconnect(chat_id, websocket)
+    except Exception as e:
+        print(f"WebSocket error: {str(e)}")
+        manager.disconnect(chat_id, websocket)
+        await websocket.close()
+
+# @chat_router.websocket("/{chat_id}/ws")
+# async def websocket_endpoint(
+#     websocket: WebSocket,
+#     chat_id: str,
+#     token: str = Query(...),  # Get token from query params
+#     db: Session = Depends(get_db),
+# ):
+#     print(f"Connection attempt to chat {chat_id} with token {token[:10]}...")
+    
+#     # Authenticate user
+#     credentials_exception = HTTPException(
+#         status_code=status.HTTP_403_FORBIDDEN,
+#         detail="Could not validate credentials",
+#     )
+    
+#     try:
+#         # Verify token
+#         payload = decode_access_token(token)
+#         if not payload:
+#             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+#             return
+            
+#         user_id = payload.get("user_id")
+#         if not user_id:
+#             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+#             return
+            
+#         # Get user from database
+#         user = db.query(User).filter(User.id == user_id).first()
+#         if not user:
+#             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+#             return
+            
+#         # Verify chat access
+#         chat = db.query(Chat).filter(
+#             (Chat.id == chat_id) & 
+#             ((Chat.user1_id == user_id) | (Chat.user2_id == user_id))
+#         ).first()
+#         if not chat:
+#             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+#             return
+        
+#         print(f"User {user_id} authorized for chat {chat_id}")
+#     except Exception as e:
+#         print(f"Authentication error: {str(e)}")
+#         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+#         return
+
+#         # Connection successful
+#     await manager.connect(chat_id, websocket)
+#     try:
+#         while True:
+#             # Wait for either text data or a ping
+#             data = await websocket.receive()
+#             if isinstance(data, str):
+#                 # Handle text message
+#                 pass
+#             elif data['type'] == 'websocket.ping':
+#                 # Respond to ping
+#                 await websocket.send_bytes(data['bytes'])
+#     except WebSocketDisconnect:
+#         manager.disconnect(chat_id, websocket)
+#     except Exception as e:
+#         print(f"WebSocket error: {str(e)}")
+#         manager.disconnect(chat_id, websocket)
+#         await websocket.close()
 
 
 @chat_router.post("/{chat_id}/message")
@@ -135,17 +377,30 @@ async def send_message(
     db.commit()
     db.refresh(message)
 
-    # Broadcast the message via WebSocket
-    await manager.broadcast(f"New message in chat {chat_id}: {message_data.content}")
-
-    return {
-        "message_id": message.id,
-        "timestamp": message.timestamp,
-        "message": "Message sent successfully",
+    # Prepare detailed message data for broadcast
+    message_payload = {
+        "type": "new_message",
+        "chat_id": chat_id,
+        "message": {
+            "id": message.id,
+            "content": message.content,
+            "sender_id": message.sender_id,
+            "timestamp": message.timestamp.isoformat(),
+            "status": message.status,
+            "pinned": message.pinned,
+            "reactions": [],
+            "translation": None,
+            "detected_language": None,
+        },
     }
 
+    # Broadcast the message to all WebSocket connections in this chat
+    await manager.broadcast(chat_id, json.dumps(message_payload))
 
-@chat_router.get("/{chat_id}/messages")
+    return message_payload
+
+
+@chat_router.get("/{chat_id}/messages", response_model=List[MessageResponse])
 async def get_messages(
     chat_id: str,
     current_user: User = Depends(get_current_user),
@@ -155,18 +410,50 @@ async def get_messages(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    return {
-        "messages": [
+    messages = (
+        db.query(Message)
+        .filter(Message.chat_id == chat_id)
+        .order_by(Message.timestamp.desc())
+        .all()
+    )
+
+    message_responses = []
+    for message in messages:
+        reactions = db.query(Reaction).filter(Reaction.message_id == message.id).all()
+
+        message_responses.append(
             {
-                "message_id": msg.id,
-                "sender_id": msg.sender_id,
-                "content": msg.content,
-                "timestamp": msg.timestamp,
-                "status": msg.status,
+                "id": message.id,
+                "content": message.content,
+                "sender": {
+                    "id": message.sender.id,
+                    "username": message.sender.username,
+                    "email": message.sender.email,
+                    "is_online": message.sender.is_online,
+                },
+                "timestamp": message.timestamp,
+                "status": message.status,
+                "pinned": message.pinned,
+                "reactions": [
+                    {
+                        "id": reaction.id,
+                        "reaction": reaction.reaction,
+                        "user": {
+                            "id": reaction.user.id,
+                            "username": reaction.user.username,
+                            "email": reaction.user.email,
+                            "is_online": reaction.user.is_online,
+                        },
+                        "timestamp": reaction.timestamp,
+                    }
+                    for reaction in reactions
+                ],
+                "translation": message.translation,
+                "detected_language": message.detected_language,
             }
-            for msg in chat.messages
-        ]
-    }
+        )
+
+    return message_responses
 
 
 @chat_router.get("/{chat_id}/message/{message_id}")
